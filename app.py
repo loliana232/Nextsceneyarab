@@ -300,7 +300,7 @@ with gr.Blocks(css=css) as demo:
         """)
         gr.Markdown("""
         [Learn more](https://github.com/QwenLM/Qwen-Image) about the Qwen-Image series. 
-        This demo uses the [Qwen-Image-Lightning v2](https://huggingface.co/lightx2v/Qwen-Image-Lightning) LoRA for accelerated inference.
+        This demo uses the [Qwen-Image-Lightning v2](https://huggingface.co/lightx2v/Qwen-Image-Lightning) LoRA + [AoT compilation & FA3](https://huggingface.co/blog/zerogpu-aoti) for accelerated inference.
         Try on [Qwen Chat](https://chat.qwen.ai/), or [download model](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) to run locally with ComfyUI or diffusers.
         """)
         with gr.Row():
