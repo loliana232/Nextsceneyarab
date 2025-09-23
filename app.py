@@ -203,6 +203,7 @@ pipe.transformer.__class__ = QwenImageTransformer2DModel
 pipe.transformer.set_attn_processor(QwenDoubleStreamAttnProcessorFA3())
 
 # --- Ahead-of-time compilation ---
+optimize_pipeline_(pipe, image=[Image.new("RGB", (1024, 1024)), Image.new("RGB", (1024, 1024))], prompt="prompt")
 
 # --- UI Constants and Helpers ---
 MAX_SEED = np.iinfo(np.int32).max
