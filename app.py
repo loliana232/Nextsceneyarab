@@ -87,6 +87,131 @@ Please strictly follow the rewriting rules below:
    "Rewritten": "..."
 }
 '''
+
+# --- NEW: Next Scene Prompt System Prompt ---
+NEXT_SCENE_SYSTEM_PROMPT = '''
+# Next Scene Prompt Generator
+You are a cinematic AI director assistant. Your task is to analyze the provided image and generate a compelling "Next Scene" prompt that describes the natural cinematic progression from the current frame.
+
+## Core Principles:
+- Think like a film director: Consider camera dynamics, visual composition, and narrative continuity
+- Create prompts that flow seamlessly from the current frame
+- Focus on **visual progression** rather than static modifications
+- Maintain compositional coherence while introducing organic transitions
+
+## Prompt Structure:
+Always begin with "Next Scene: " followed by your cinematic description.
+
+## Key Elements to Include:
+1. **Camera Movement**: Specify one of these or combinations:
+   - Dolly shots (camera moves toward/away from subject)
+   - Push-ins or pull-backs
+   - Tracking moves (camera follows subject)
+   - Pan left/right
+   - Tilt up/down
+   - Zoom in/out
+
+2. **Framing Evolution**: Describe how the shot composition changes:
+   - Wide to close-up transitions
+   - Angle shifts (high angle to eye level, etc.)
+   - Reframing of subjects
+   - Revealing new elements in frame
+
+3. **Environmental Reveals** (if applicable):
+   - New characters entering frame
+   - Expanded scenery
+   - Spatial progression
+   - Background elements becoming visible
+
+4. **Atmospheric Shifts** (if enhancing the scene):
+   - Lighting changes (golden hour, shadows, lens flare)
+   - Weather evolution
+   - Time-of-day transitions
+   - Depth and mood indicators
+
+## Guidelines:
+- Keep descriptions concise but vivid (2-3 sentences max)
+- Always specify the camera action first
+- Focus on what changes between this frame and the next
+- Maintain the scene's existing style and mood unless intentionally transitioning
+- Prefer natural, organic progressions over abrupt changes
+
+## Example Outputs:
+- "Next Scene: The camera pulls back from a tight close-up on the airship to a sweeping aerial view, revealing an entire fleet of vessels soaring through a fantasy landscape."
+- "Next Scene: The camera tracks forward and tilts down, bringing the sun and helicopters closer into frame as a strong lens flare intensifies."
+- "Next Scene: The camera pans right, removing the dragon and rider from view while revealing more of the floating mountain range in the distance."
+- "Next Scene: The camera moves slightly forward as sunlight breaks through the clouds, casting a soft glow around the character's silhouette in the mist. Realistic cinematic style, atmospheric depth."
+
+## Output Format:
+Return ONLY the next scene prompt as plain text, starting with "Next Scene: "
+Do NOT include JSON formatting or additional explanations.
+'''
+
+# --- NEW: Function to generate Next Scene prompts using VLM ---
+def generate_next_scene_prompt(images):
+    """
+    Uses a VLM to analyze the uploaded image(s) and generate a cinematic "Next Scene" prompt
+    following the guidelines of the next-scene LoRA.
+    """
+    if images is None or len(images) == 0:
+        return "Please upload an image first to generate a next scene prompt."
+    
+    # Ensure HF_TOKEN is set
+    api_key = os.environ.get("HF_TOKEN")
+    if not api_key:
+        return "Error: HF_TOKEN not set. Cannot generate next scene prompt."
+    
+    try:
+        # Load input images into PIL Images using the shared helper function
+        pil_images = process_gallery_images(images)
+        
+        if len(pil_images) == 0:
+            return "Error: Could not load images."
+        
+        # Initialize the InferenceClient with vision-capable model
+        client = InferenceClient(
+            provider="cerebras",
+            api_key=api_key,
+        )
+        
+        # Format the messages for the chat completions API
+        messages = [
+            {"role": "system", "content": NEXT_SCENE_SYSTEM_PROMPT},
+            {"role": "user", "content": []}
+        ]
+        
+        # Add images to the message
+        for img in pil_images:
+            messages[1]["content"].append(
+                {"image": f"data:image/png;base64,{encode_image(img)}"}
+            )
+        
+        # Add the text prompt
+        messages[1]["content"].append({
+            "text": "Analyze this image and generate a compelling 'Next Scene' prompt that describes the natural cinematic progression from this frame. Focus on camera movement, framing changes, and atmospheric evolution."
+        })
+        
+        # Call the API
+        completion = client.chat.completions.create(
+            model="Qwen/Qwen3-235B-A22B-Instruct-2507",
+            messages=messages,
+        )
+        
+        # Parse the response
+        result = completion.choices[0].message.content.strip()
+        
+        # Ensure it starts with "Next Scene:"
+        if not result.startswith("Next Scene:"):
+            result = "Next Scene: " + result
+        
+        print(f"Generated Next Scene Prompt: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"Error generating next scene prompt: {e}")
+        return f"Error: Could not generate next scene prompt. {str(e)}"
+
+
 # --- Prompt Enhancement using Hugging Face InferenceClient ---
 def polish_prompt_hf(prompt, img_list):
     """
@@ -153,6 +278,25 @@ def encode_image(pil_image):
     pil_image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
+def process_gallery_images(images):
+    """
+    Helper function to convert Gradio gallery images to PIL Images.
+    Handles various input formats from the gallery component.
+    """
+    pil_images = []
+    if images is not None:
+        for item in images:
+            try:
+                if isinstance(item[0], Image.Image):
+                    pil_images.append(item[0].convert("RGB"))
+                elif isinstance(item[0], str):
+                    pil_images.append(Image.open(item[0]).convert("RGB"))
+                elif hasattr(item, "name"):
+                    pil_images.append(Image.open(item.name).convert("RGB"))
+            except Exception:
+                continue
+    return pil_images
+
 # --- Model Loading ---
 dtype = torch.bfloat16
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -182,24 +326,24 @@ optimize_pipeline_(pipe, image=[Image.new("RGB", (1024, 1024)), Image.new("RGB",
 # --- UI Constants and Helpers ---
 MAX_SEED = np.iinfo(np.int32).max
 
-def use_output_as_input(output_images):
-    """Convert output images to input format for the gallery"""
-    if output_images is None or len(output_images) == 0:
-        return []
-    return output_images
+def use_output_as_input(result_gallery):
+    """Takes the generated images from result and moves them to input_images."""
+    if result_gallery:
+        # result_gallery is already a list of PIL images
+        return result_gallery
+    return []
 
-# --- Main Inference Function (with hardcoded negative prompt) ---
-@spaces.GPU(duration=300)
+@spaces.GPU
 def infer(
     images,
     prompt,
     seed=42,
     randomize_seed=False,
     true_guidance_scale=1.0,
-    num_inference_steps=4,
-    height=None,
-    width=None,
-    rewrite_prompt=True,
+    num_inference_steps=8,
+    height=256,
+    width=256,
+    rewrite_prompt=False,
     num_images_per_prompt=1,
     progress=gr.Progress(track_tqdm=True),
 ):
@@ -215,19 +359,8 @@ def infer(
     # Set up the generator for reproducibility
     generator = torch.Generator(device=device).manual_seed(seed)
     
-    # Load input images into PIL Images
-    pil_images = []
-    if images is not None:
-        for item in images:
-            try:
-                if isinstance(item[0], Image.Image):
-                    pil_images.append(item[0].convert("RGB"))
-                elif isinstance(item[0], str):
-                    pil_images.append(Image.open(item[0]).convert("RGB"))
-                elif hasattr(item, "name"):
-                    pil_images.append(Image.open(item.name).convert("RGB"))
-            except Exception:
-                continue
+    # Load input images into PIL Images using the shared helper function
+    pil_images = process_gallery_images(images)
 
     if height==256 and width==256:
         height, width = None, None
@@ -304,6 +437,8 @@ with gr.Blocks(css=css) as demo:
                     placeholder="describe the edit instruction",
                     container=False,
             )
+            # NEW: Add button to generate next scene prompt
+            generate_next_scene_btn = gr.Button("🎬 Generate Next Scene Prompt", variant="secondary", size="sm")
             run_button = gr.Button("Edit!", variant="primary")
 
         with gr.Accordion("Advanced Settings", open=False):
@@ -357,6 +492,13 @@ with gr.Blocks(css=css) as demo:
                 rewrite_prompt = gr.Checkbox(label="Rewrite prompt", value=False)
 
         # gr.Examples(examples=examples, inputs=[prompt], outputs=[result, seed], fn=infer, cache_examples=False)
+
+    # NEW: Wire up the next scene prompt generator button
+    generate_next_scene_btn.click(
+        fn=generate_next_scene_prompt,
+        inputs=[input_images],
+        outputs=[prompt]
+    )
 
     gr.on(
         triggers=[run_button.click, prompt.submit],
