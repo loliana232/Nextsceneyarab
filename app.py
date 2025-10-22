@@ -20,21 +20,53 @@ import os
 import base64
 import json
 
+# System prompt for VLM to suggest next scene prompts
+NEXT_SCENE_SUGGESTION_PROMPT = '''
+# Next Scene Prompt Generator
+You are a cinematic visual continuity expert. Your task is to analyze the provided image and generate a professional "Next Scene" prompt that maintains narrative coherence while introducing organic transitions.
+
+## Analysis Framework:
+1. Identify the current scene's key elements:
+   - Subject(s) and their positions
+   - Camera angle and framing (close-up, medium, wide, etc.)
+   - Environment and setting
+   - Lighting and atmosphere
+   - Mood and emotional tone
+
+2. Generate a "Next Scene" prompt following these principles:
+   - Begin with specific camera direction (dolly, push, pull, track, pan, tilt, etc.)
+   - Describe the transition type:
+     * Camera movement: Dolly shots, push-ins, pull-backs, tracking moves
+     * Framing evolution: Wide to close-up transitions, angle shifts, reframing
+     * Environmental reveals: New characters entering frame, expanded scenery, spatial progression
+     * Atmospheric shifts: Lighting changes, weather evolution, time-of-day transitions
+   - Maintain compositional coherence with the original scene
+   - Include specific visual details about what changes and what remains
+
+## Output Format:
+Generate a single, concise prompt starting with "Next Scene:" followed by the camera movement and visual description.
+
+## Examples of Good Prompts:
+- "Next Scene: The camera pulls back from a tight close-up on the airship to a sweeping aerial view, revealing an entire fleet of vessels soaring through a fantasy landscape."
+- "Next Scene: The camera tracks forward and tilts down, bringing the sun and helicopters closer into frame as a strong lens flare intensifies."
+- "Next Scene: The camera pans right, removing the dragon and rider from view while revealing more of the floating mountain range in the distance."
+- "Next Scene: The camera dollies in slowly while the morning fog begins to lift, revealing hidden architectural details in the background as golden sunlight breaks through."
+- "Next Scene: A smooth tracking shot follows the subject as they move left, with the background shifting to reveal a previously unseen cityscape bathed in twilight."
+
+Return only the prompt text, no additional explanation.
+'''
+
 SYSTEM_PROMPT = '''
 # Edit Instruction Rewriter
 You are a professional edit instruction rewriter. Your task is to generate a precise, concise, and visually achievable professional-level edit instruction based on the user-provided instruction and the image to be edited.  
-
 Please strictly follow the rewriting rules below:
-
 ## 1. General Principles
 - Keep the rewritten prompt **concise and comprehensive**. Avoid overly long sentences and unnecessary descriptive language.  
 - If the instruction is contradictory, vague, or unachievable, prioritize reasonable inference and correction, and supplement details when necessary.  
 - Keep the main part of the original instruction unchanged, only enhancing its clarity, rationality, and visual feasibility.  
 - All added objects or modifications must align with the logic and style of the scene in the input images.  
 - If multiple sub-images are to be generated, describe the content of each sub-image individually.  
-
 ## 2. Task-Type Handling Rules
-
 ### 1. Add, Delete, Replace Tasks
 - If the instruction is clear (already includes task type, target entity, position, quantity, attributes), preserve the original intent and only refine the grammar.  
 - If the description is vague, supplement with minimal but sufficient details (category, color, size, orientation, position, etc.). For example:  
@@ -42,7 +74,6 @@ Please strictly follow the rewriting rules below:
     > Rewritten: "Add a light-gray cat in the bottom-right corner, sitting and facing the camera"  
 - Remove meaningless instructions: e.g., "Add 0 objects" should be ignored or flagged as invalid.  
 - For replacement tasks, specify "Replace Y with X" and briefly describe the key visual features of X.  
-
 ### 2. Text Editing Tasks
 - All text content must be enclosed in English double quotes `" "`. Keep the original language of the text, and keep the capitalization.  
 - Both adding new text and replacing existing text are text replacement tasks, For example:  
@@ -51,14 +82,12 @@ Please strictly follow the rewriting rules below:
     - Replace the visual object to "yy"  
 - Specify text position, color, and layout only if user has required.  
 - If font is specified, keep the original language of the font.  
-
 ### 3. Human Editing Tasks
 - Make the smallest changes to the given user's prompt.  
 - If changes to background, action, expression, camera shot, or ambient lighting are required, please list each modification individually.
 - **Edits to makeup or facial features / expression must be subtle, not exaggerated, and must preserve the subject's identity consistency.**
     > Original: "Add eyebrows to the face"  
     > Rewritten: "Slightly thicken the person's eyebrows with little change, look natural."
-
 ### 4. Style Conversion or Enhancement Tasks
 - If a style is specified, describe it concisely using key visual features. For example:  
     > Original: "Disco style"  
@@ -69,12 +98,10 @@ Please strictly follow the rewriting rules below:
 - Clearly specify the object to be modified. For example:  
     > Original: Modify the subject in Picture 1 to match the style of Picture 2.  
     > Rewritten: Change the girl in Picture 1 to the ink-wash style of Picture 2 — rendered in black-and-white watercolor with soft color transitions.
-
 ### 5. Material Replacement
 - Clearly specify the object and the material. For example: "Change the material of the apple to papercut style."
 - For text material replacement, use the fixed template:
     "Change the material of text "xxxx" to laser style"
-
 ### 6. Logo/Pattern Editing
 - Material replacement should preserve the original shape and structure as much as possible. For example:
    > Original: "Convert to sapphire material"  
@@ -82,23 +109,87 @@ Please strictly follow the rewriting rules below:
 - When migrating logos/patterns to new scenes, ensure shape and structure consistency. For example:
    > Original: "Migrate the logo in the image to a new scene"  
    > Rewritten: "Migrate the logo in the image to a new scene, preserving similar shape and structure"
-
 ### 7. Multi-Image Tasks
 - Rewritten prompts must clearly point out which image's element is being modified. For example:  
     > Original: "Replace the subject of picture 1 with the subject of picture 2"  
     > Rewritten: "Replace the girl of picture 1 with the boy of picture 2, keeping picture 2's background unchanged"  
 - For stylization tasks, describe the reference image's style in the rewritten prompt, while preserving the visual content of the source image.  
-
 ## 3. Rationale and Logic Check
 - Resolve contradictory instructions: e.g., "Remove all trees but keep all trees" requires logical correction.
 - Supplement missing critical information: e.g., if position is unspecified, choose a reasonable area based on composition (near subject, blank space, center/edge, etc.).
-
 # Output Format Example
 ```json
 {
    "Rewritten": "..."
 }
 '''
+
+# --- Function to suggest next scene prompts using VLM ---
+def suggest_next_scene_prompt(images):
+    """
+    Generates a cinematic next scene prompt suggestion using the VLM.
+    """
+    if not images or len(images) == 0:
+        return ""
+    
+    # Ensure HF_TOKEN is set
+    api_key = os.environ.get("HF_TOKEN")
+    if not api_key:
+        print("Warning: HF_TOKEN not set. Cannot generate prompt suggestion.")
+        return ""
+    
+    try:
+        # Get the first image (or last if using output)
+        if isinstance(images[0], tuple):
+            img = images[0][0]
+        else:
+            img = images[0]
+        
+        if isinstance(img, str):
+            img = Image.open(img).convert("RGB")
+        elif not isinstance(img, Image.Image):
+            return ""
+        
+        # Initialize the client
+        client = InferenceClient(
+            provider="cerebras",
+            api_key=api_key,
+        )
+        
+        # Format the messages for the chat completions API
+        sys_prompt = "You are a cinematic visual continuity expert. Generate next scene prompts that follow professional cinematography principles."
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": [
+                {"image": f"data:image/png;base64,{encode_image(img)}"},
+                {"text": NEXT_SCENE_SUGGESTION_PROMPT}
+            ]}
+        ]
+        
+        # Call the API
+        completion = client.chat.completions.create(
+            model="Qwen/Qwen3-235B-A22B-Instruct-2507",
+            messages=messages,
+            temperature=0.7,  # Add some creativity
+            max_tokens=150
+        )
+        
+        # Parse the response
+        suggestion = completion.choices[0].message.content
+        
+        # Clean up the suggestion
+        suggestion = suggestion.strip()
+        
+        # Ensure it starts with "Next Scene:" if not already
+        if not suggestion.startswith("Next Scene:"):
+            suggestion = f"Next Scene: {suggestion}"
+        
+        return suggestion
+        
+    except Exception as e:
+        print(f"Error generating prompt suggestion: {e}")
+        return ""
+
 # --- Prompt Enhancement using Hugging Face InferenceClient ---
 def polish_prompt_hf(prompt, img_list):
     """
@@ -200,19 +291,18 @@ optimize_pipeline_(pipe, image=[Image.new("RGB", (1024, 1024)), Image.new("RGB",
 # --- UI Constants and Helpers ---
 MAX_SEED = np.iinfo(np.int32).max
 
-def use_output_as_input(output_images):
-    """Convert output images to input format for the gallery"""
-    if output_images is None or len(output_images) == 0:
-        return []
-    return output_images
+def use_output_as_input(gallery):
+    """Copy the output image to input for iterative editing"""
+    if gallery and len(gallery) > 0:
+        return gallery
+    return None
 
-# --- Main Inference Function (with hardcoded negative prompt) ---
-@spaces.GPU(duration=300)
+@spaces.GPU(duration=12)
 def infer(
     images,
     prompt,
-    seed=42,
-    randomize_seed=False,
+    seed,
+    randomize_seed,
     true_guidance_scale=1.0,
     num_inference_steps=4,
     height=None,
@@ -273,6 +363,21 @@ def infer(
     # Return images, seed, and make button visible
     return image, seed, gr.update(visible=True)
 
+# --- Function to handle prompt suggestion button ---
+def on_suggest_prompt(images, current_prompt):
+    """
+    Generates a next scene prompt suggestion when the button is clicked.
+    """
+    if not images or len(images) == 0:
+        return current_prompt, gr.update(visible=False)
+    
+    suggestion = suggest_next_scene_prompt(images)
+    
+    if suggestion:
+        return suggestion, gr.update(visible=True, value="✨ Suggestion generated!")
+    else:
+        return current_prompt, gr.update(visible=True, value="❌ Could not generate suggestion")
+
 # --- Examples and UI Layout ---
 examples = []
 
@@ -288,6 +393,9 @@ css = """
     width: 400px;
 }
 #edit_text{margin-top: -62px !important}
+.suggest-btn {
+    background: linear-gradient(90deg, #5b47d1 0%, #7c6fe1 100%);
+}
 """
 
 with gr.Blocks(css=css) as demo:
@@ -295,13 +403,16 @@ with gr.Blocks(css=css) as demo:
         gr.HTML("""
         <div id="logo-title">
             <img src="https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-Image/qwen_image_edit_logo.png" alt="Qwen-Image Edit Logo" width="400" style="display: block; margin: 0 auto;">
-            <h2 style="font-style: italic;color: #5b47d1;margin-top: -27px !important;margin-left: 96px">[Plus] Fast, 4-steps with Qwen Rapid AIO</h2>
+            <h2 style="font-style: italic;color: #5b47d1;margin-top: -27px !important;margin-left: 96px">[Plus] Fast, 4-steps with Qwen Rapid AIO + Next Scene LoRA</h2>
         </div>
         """)
         gr.Markdown("""
+        **Enhanced with Next Scene LoRA for cinematic continuity!** 🎬
+        
         [Learn more](https://github.com/QwenLM/Qwen-Image) about the Qwen-Image series. 
-        This demo uses the new [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) with [Phr00t/Qwen-Image-Edit-Rapid-AIO](https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO/tree/main) + [AoT compilation & FA3](https://huggingface.co/blog/zerogpu-aoti) for accelerated inference.
-        Try on [Qwen Chat](https://chat.qwen.ai/), or [download model](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) to run locally with ComfyUI or diffusers.
+        This demo uses [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) with [Next Scene LoRA](https://huggingface.co/lovis93/next-scene-qwen-image-lora-2509) for cinematic storytelling.
+        
+        **New Feature:** Click "🎬 Suggest Next Scene" to get AI-generated cinematic prompts that maintain visual continuity!
         """)
         with gr.Row():
             with gr.Column():
@@ -309,6 +420,15 @@ with gr.Blocks(css=css) as demo:
                                           show_label=False, 
                                           type="pil", 
                                           interactive=True)
+                
+                # Add the suggest prompt button below input images
+                suggest_btn = gr.Button("🎬 Suggest Next Scene Prompt", 
+                                       variant="primary", 
+                                       elem_classes=["suggest-btn"])
+                suggest_status = gr.Textbox(visible=False, 
+                                           label="", 
+                                           interactive=False,
+                                           max_lines=1)
 
             with gr.Column():
                 result = gr.Gallery(label="Result", show_label=False, type="pil")
@@ -319,7 +439,7 @@ with gr.Blocks(css=css) as demo:
             prompt = gr.Text(
                     label="Prompt",
                     show_label=False,
-                    placeholder="describe the edit instruction",
+                    placeholder="describe the edit instruction (or click 'Suggest Next Scene' for AI suggestions)",
                     container=False,
             )
             run_button = gr.Button("Edit!", variant="primary")
@@ -372,10 +492,31 @@ with gr.Blocks(css=css) as demo:
                 )
                 
                 
-                rewrite_prompt = gr.Checkbox(label="Rewrite prompt", value=False)
+                rewrite_prompt = gr.Checkbox(label="Enhance prompt (recommended)", value=True)
+
+        gr.Markdown("""
+        ### 🎬 Next Scene Tips:
+        - **Camera Movements**: Prompts will include dolly shots, push-ins, pull-backs, tracking moves
+        - **Framing Evolution**: Wide to close-up transitions, angle shifts, reframing
+        - **Environmental Reveals**: New characters, expanded scenery, spatial progression
+        - **Atmospheric Shifts**: Lighting changes, weather evolution, time transitions
+        
+        **Pro tip**: Chain multiple generations to create cinematic storyboards!
+        """)
 
         # gr.Examples(examples=examples, inputs=[prompt], outputs=[result, seed], fn=infer, cache_examples=False)
 
+    # Event handler for suggest prompt button
+    suggest_btn.click(
+        fn=on_suggest_prompt,
+        inputs=[input_images, prompt],
+        outputs=[prompt, suggest_status]
+    ).then(
+        fn=lambda: gr.update(visible=False),
+        outputs=[suggest_status],
+        _js="() => setTimeout(() => {}, 3000)"  # Hide status after 3 seconds
+    )
+    
     gr.on(
         triggers=[run_button.click, prompt.submit],
         fn=infer,
