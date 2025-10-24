@@ -171,7 +171,7 @@ Do NOT include JSON formatting or additional explanations.
 '''
 
 # --- Prompt Enhancement using Hugging Face InferenceClient ---
-def polish_prompt_hf(prompt, img_list):
+def polish_prompt_hf(original_prompt, img_list):
     """
     Rewrites the prompt using a Hugging Face InferenceClient.
     """
@@ -179,13 +179,13 @@ def polish_prompt_hf(prompt, img_list):
     api_key = os.environ.get("HF_TOKEN")
     if not api_key:
         print("Warning: HF_TOKEN not set. Falling back to original prompt.")
-        return prompt
+        return original_prompt
 
     try:
         # Initialize the client
-        prompt = f"{SYSTEM_PROMPT}\n\nUser Input: {prompt}\n\nRewritten Prompt:"
+        prompt = f"{SYSTEM_PROMPT}\n\nUser Input: {original_prompt}\n\nRewritten Prompt:"
         client = InferenceClient(
-            provider="cerebras",
+            provider="nebius",
             api_key=api_key,
         )
 
@@ -201,7 +201,7 @@ def polish_prompt_hf(prompt, img_list):
 
         # Call the API
         completion = client.chat.completions.create(
-            model="Qwen/Qwen3-235B-A22B-Instruct-2507",
+            model="Qwen/Qwen2.5-VL-72B-Instruct",
             messages=messages,
         )
         
@@ -209,7 +209,7 @@ def polish_prompt_hf(prompt, img_list):
         result = completion.choices[0].message.content
         
         # Try to extract JSON if present
-        if '{"Rewritten"' in result:
+        if '"Rewritten"' in result:
             try:
                 # Clean up the response
                 result = result.replace('```json', '').replace('```', '')
@@ -226,7 +226,7 @@ def polish_prompt_hf(prompt, img_list):
     except Exception as e:
         print(f"Error during API call to Hugging Face: {e}")
         # Fallback to original prompt if enhancement fails
-        return prompt
+        return original_prompt
     
 def next_scene_prompt(original_prompt, img_list):
     """
