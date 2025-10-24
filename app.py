@@ -484,6 +484,13 @@ with gr.Blocks(css=css) as demo:
                                           type="pil", 
                                           interactive=True)
 
+                prompt = gr.Text(
+                    label="Prompt 🪄",
+                    show_label=True,
+                    placeholder="Next scene: The camera dollies in to a tight close-up...",
+            )
+                run_button = gr.Button("Edit!", variant="primary")
+
             with gr.Column():
                 result = gr.Gallery(label="Result", show_label=False, type="pil")
                 # Add this button right after the result gallery - initially hidden
@@ -499,13 +506,6 @@ with gr.Blocks(css=css) as demo:
                     show_label=True
                 )
 
-        with gr.Row():
-            prompt = gr.Text(
-                    label="Prompt 🪄",
-                    show_label=True,
-                    placeholder="Next scene: The camera dollies in to a tight close-up...",
-            )
-            run_button = gr.Button("Edit!", variant="primary")
 
         with gr.Accordion("Advanced Settings", open=False):
             # Negative prompt UI element is removed here
