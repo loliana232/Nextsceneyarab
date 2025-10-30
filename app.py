@@ -62,8 +62,8 @@ def turn_into_video(input_images, output_images, prompt, progress=gr.Progress(tr
         
         progress(0.35, desc="generating video...")
         result = client.predict(
-            start_image_pil={"image": handle_file(tmp_start.name)},
-            end_image_pil={"image": handle_file(tmp_end.name)},
+            start_image_pil=start_img,
+            end_image_pil=end_img,
             prompt=prompt or "smooth cinematic transition",
 
             api_name="/generate_video"  
