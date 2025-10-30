@@ -29,13 +29,11 @@ import os
 import gradio as gr
 
 def turn_into_video(input_images, output_images, prompt, progress=gr.Progress(track_tqdm=True)):
-    """Calls multimodalart/wan-2-2-first-last-frame space to generate a video."""
     if not input_images or not output_images:
         raise gr.Error("Please generate an output image first.")
 
     progress(0.02, desc="Preparing images...")
 
-    # Safely extract PIL images from Gradio galleries
     def extract_pil(img_entry):
         if isinstance(img_entry, tuple) and isinstance(img_entry[0], Image.Image):
             return img_entry[0]
@@ -56,21 +54,23 @@ def turn_into_video(input_images, output_images, prompt, progress=gr.Progress(tr
         start_img.save(tmp_start.name)
         end_img.save(tmp_end.name)
 
-        progress(0.20, desc="Connecting to Wan space...")
+    progress(0.20, desc="Connecting to Wan space...")
 
-        client = Client("multimodalart/wan-2-2-first-last-frame")  
-        
-        progress(0.35, desc="generating video...")
-        result = client.predict(
-            start_image_pil=start_img,
-            end_image_pil=end_img,
-            prompt=prompt or "smooth cinematic transition",
+    client = Client("multimodalart/wan-2-2-first-last-frame")  
 
-            api_name="/generate_video"  
-        )
+    progress(0.35, desc="Generating video...")
+
+    result = client.predict(
+        start_image_pil=handle_file(tmp_start.name),
+        end_image_pil=handle_file(tmp_end.name),
+        prompt=prompt or "smooth cinematic transition",
+        api_name="/generate_video"
+    )
 
     progress(0.95, desc="Finalizing...")
-    return result[0] 
+
+    return result[0]
+
 
 
 
